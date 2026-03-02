@@ -103,6 +103,38 @@ func TestClientDoNoRetryOnPermanentError(t *testing.T) {
 	}
 }
 
+func TestClientDoRetryOnConflict(t *testing.T) {
+	var callCount int
+
+	client := hclient.NewClientFromInner(
+		hcloudlib.NewClient(hcloudlib.WithToken("tok")),
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := client.Do(ctx, "testConflict", func() error {
+		callCount++
+		if callCount < 3 {
+			return hcloudlib.Error{
+				Code:    hcloudlib.ErrorCodeConflict,
+				Message: "conflict: resource changed during request",
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("expected eventual success after conflict retries, got: %v", err)
+	}
+
+	if callCount < 3 {
+		t.Fatalf("expected at least 3 calls for conflict retry, got %d", callCount)
+	}
+}
+
 func TestClientFindSnapshotByName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/images" {

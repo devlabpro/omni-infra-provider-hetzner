@@ -19,6 +19,7 @@ import (
 
 	provconfig "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/config"
 	hclient "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/hcloud"
+	providermeta "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/provider/meta"
 	"github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/provider/resources"
 )
 
@@ -127,7 +128,7 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 					Image:      image,
 					Location:   &hcloud.Location{Name: location},
 					Labels: map[string]string{
-						"omni-provider": p.config.Meta.ProviderID,
+						"omni-provider": providermeta.ProviderID,
 						"machine-id":    serverName,
 					},
 				}

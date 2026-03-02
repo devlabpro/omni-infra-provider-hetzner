@@ -44,7 +44,6 @@ func (c *Client) Inner() *hcloud.Client {
 	return c.inner
 }
 
-// isRetryable helper removed because it was unused and represented dead code.
 // Do executes an API operation with exponential backoff retry logic.
 func (c *Client) Do(ctx context.Context, operation string, fn func() error) error {
 	b := backoff.NewExponentialBackOff()
@@ -64,22 +63,16 @@ func (c *Client) Do(ctx context.Context, operation string, fn func() error) erro
 			return nil
 		}
 
-		// Check for rate limiting explicitly via HTTP status
+		// For hcloud API errors, retry only on known transient codes; treat all others as permanent.
 		var hcloudErr hcloud.Error
 		if errors.As(err, &hcloudErr) {
 			switch hcloudErr.Code {
-			case hcloud.ErrorCodeRateLimitExceeded:
-				c.logger.Warn("hetzner API rate limit hit, retrying",
+			case hcloud.ErrorCodeRateLimitExceeded,
+				hcloud.ErrorCodeServiceError,
+				hcloud.ErrorCodeConflict:
+				c.logger.Warn("hetzner API transient error, retrying",
 					zap.String("operation", operation),
-					zap.Int("attempt", attempt),
-					zap.Error(err),
-				)
-
-				return err // retryable
-
-			case hcloud.ErrorCodeServiceError:
-				c.logger.Warn("hetzner API service error, retrying",
-					zap.String("operation", operation),
+					zap.String("code", string(hcloudErr.Code)),
 					zap.Int("attempt", attempt),
 					zap.Error(err),
 				)
@@ -87,11 +80,11 @@ func (c *Client) Do(ctx context.Context, operation string, fn func() error) erro
 				return err // retryable
 			}
 
-			// Non-retryable API error
+			// All other API errors are non-retryable.
 			return backoff.Permanent(err)
 		}
 
-		// Retry on network/connection errors
+		// Retry on network/connection errors (not hcloud.Error).
 		c.logger.Warn("hetzner API request failed, retrying",
 			zap.String("operation", operation),
 			zap.Int("attempt", attempt),
