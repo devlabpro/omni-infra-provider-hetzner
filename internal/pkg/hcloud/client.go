@@ -44,35 +44,7 @@ func (c *Client) Inner() *hcloud.Client {
 	return c.inner
 }
 
-// isRetryable returns true if the error warrants a retry attempt.
-func isRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var hcloudErr hcloud.Error
-	if errors.As(err, &hcloudErr) {
-		switch hcloudErr.Code {
-		case hcloud.ErrorCodeRateLimitExceeded,
-			hcloud.ErrorCodeServiceError,
-			hcloud.ErrorCodeConflict:
-			return true
-		}
-
-		if hcloudErr.Code == "" && hcloudErr.Message == "" {
-			// Likely a network-level error wrapped in hcloud.Error
-			return true
-		}
-	}
-
-	// Retry on context-unrelated network/timeout errors
-	if errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-
-	return false
-}
-
+// isRetryable helper removed because it was unused and represented dead code.
 // Do executes an API operation with exponential backoff retry logic.
 func (c *Client) Do(ctx context.Context, operation string, fn func() error) error {
 	b := backoff.NewExponentialBackOff()
