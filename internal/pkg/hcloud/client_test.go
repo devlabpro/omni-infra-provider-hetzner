@@ -64,7 +64,7 @@ func TestClientDoRetryOnTransientErrors(t *testing.T) {
 	}()
 
 	if err != nil {
-		t.Logf("client.Do returned error after retries: %v", err)
+		t.Fatalf("client.Do returned error after retries: %v", err)
 	}
 
 	if attempts.Load() < 3 {
