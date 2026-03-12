@@ -28,6 +28,14 @@ has_flag() {
     return 1
 }
 
+# If the first argument doesn't start with '-', exec it directly so that
+# commands like `docker run <image> sh` work without going through the
+# provider entrypoint logic.
+case "${1:-}" in
+    -* | "") ;;
+    *) exec "$@" ;;
+esac
+
 extra_args=""
 
 if ! has_flag --omni-api-endpoint "$@"; then
