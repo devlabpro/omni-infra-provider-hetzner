@@ -242,6 +242,41 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				return nil
 			},
 		),
+		provision.NewStep(
+		    "waitForMachineToConnect",
+		    func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
+		        serverIDStr := pctx.State.TypedSpec().Value.ServerId
+		        if serverIDStr == "" {
+		            return provision.NewRetryErrorf(5*time.Second, "server ID not set yet")
+		        }
+		
+		        machineList, err := pctx.Runtime().List(ctx, omni.NewMachineState().Metadata())
+		        if err != nil {
+		            return provision.NewRetryErrorf(10*time.Second, "failed to list machines: %w", err)
+		        }
+		
+		        expectedName := pctx.GetRequestID()
+		
+		        for _, machineResource := range machineList.Items {
+		            machine, ok := machineResource.(*omni.Machine)
+		            if !ok {
+		                continue
+		            }
+		
+		            if machine.Metadata().Labels().Get("omni.sidero.dev/hostname") == expectedName {
+		                pctx.SetMachineUUID(ctx, machine.Metadata().ID())
+		                
+		                logger.Info("machine connected and linked to request",
+		                    zap.String("machine_uuid", machine.Metadata().ID()),
+		                    zap.String("server_id", serverIDStr),
+		                )
+		                
+		                return nil
+		            }
+		        }
+		        return provision.NewRetryErrorf(10*time.Second, "waiting for machine to connect to Omni")
+		    },
+		),
 	}
 }
 
