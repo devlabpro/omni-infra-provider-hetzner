@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+	"github.com/siderolabs/omni/client/pkg/client"
 	"github.com/siderolabs/omni/client/pkg/infra/provision"
 	"github.com/siderolabs/omni/client/pkg/omni/resources/infra"
+	omnires "github.com/siderolabs/omni/client/pkg/omni/resources/omni"
 	"go.uber.org/zap"
 
+	"github.com/cosi-project/runtime/pkg/safe"
 	provconfig "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/config"
 	hclient "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/hcloud"
 	providermeta "github.com/theGunner295/omni-infra-provider-hetzner/internal/pkg/provider/meta"
@@ -25,13 +28,15 @@ import (
 
 // Provisioner implements the Hetzner infra provider.
 type Provisioner struct {
-	config  *provconfig.Config
-	clients map[string]*hclient.Client // keyed by project_id
-	logger  *zap.Logger
+	config                          *provconfig.Config
+	clients                         map[string]*hclient.Client // keyed by project_id
+	omniClient                      *client.Client
+	omniMachineServiceAccountClient *client.Client
+	logger                          *zap.Logger
 }
 
 // NewProvisioner creates a new Hetzner Provisioner.
-func NewProvisioner(cfg *provconfig.Config, logger *zap.Logger) *Provisioner {
+func NewProvisioner(cfg *provconfig.Config, omniClient *client.Client, omniMachineServiceAccountClient *client.Client, logger *zap.Logger) *Provisioner {
 	clients := make(map[string]*hclient.Client, len(cfg.Projects))
 
 	for _, p := range cfg.Projects {
@@ -39,9 +44,11 @@ func NewProvisioner(cfg *provconfig.Config, logger *zap.Logger) *Provisioner {
 	}
 
 	return &Provisioner{
-		config:  cfg,
-		clients: clients,
-		logger:  logger,
+		config:                          cfg,
+		clients:                         clients,
+		omniClient:                      omniClient,
+		omniMachineServiceAccountClient: omniMachineServiceAccountClient,
+		logger:                          logger,
 	}
 }
 
@@ -238,6 +245,84 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				logger.Info("server is running",
 					zap.String("server_id", serverIDStr),
 				)
+
+				return nil
+			},
+		),
+		provision.NewStep(
+			"syncServer",
+			func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
+				serverIDStr := pctx.State.TypedSpec().Value.ServerId
+				// We delay the execution of this step for 2 minutes since the request was created.
+				// This allows Omni to register the machine after the server is created in Hetzner.
+				created := pctx.MachineRequestStatus.Metadata().Created()
+				if elapsed := time.Since(created); elapsed < 2*time.Minute {
+					retryAfter := 2*time.Minute - elapsed
+					logger.Info("delaying syncServer step to allow machine to appear in Omni",
+						zap.Duration("elapsed", elapsed),
+						zap.Duration("retry_after", retryAfter),
+					)
+
+					return provision.NewRetryErrorf(retryAfter, "waiting for 2 minutes since creation to allow machine to appear in Omni")
+				}
+
+				runtime := p.omniClient.Omni().State()
+
+				// If we have a dedicated client for machines/statuses, use its state.
+				if p.omniMachineServiceAccountClient != nil {
+					runtime = p.omniMachineServiceAccountClient.Omni().State()
+				}
+
+				// Get all connected machines from Omni.
+				machines, err := safe.ReaderListAll[*omnires.Machine](ctx, runtime)
+				if err != nil {
+					return fmt.Errorf("failed to list machines from Omni: %w", err)
+				}
+
+				// Get all machine statuses from Omni.
+				machineStatuses, machineStatusesErr := safe.ReaderListAll[*omnires.MachineStatus](ctx, runtime)
+				if machineStatusesErr != nil {
+					// We need this info, but if it failed due to permission, we show a clear error.
+					logger.Warn("failed to list machine statuses from Omni", zap.Error(machineStatusesErr))
+				}
+
+				logger.Info("found connected machines in Omni",
+					zap.Int("count", machines.Len()),
+				)
+
+				machines.ForEach(func(machine *omnires.Machine) {
+					id := machine.Metadata().ID()
+					machineLog := logger.With(
+						zap.String("id", id),
+						zap.String("address", machine.TypedSpec().Value.ManagementAddress),
+					)
+
+					if machineStatusesErr == nil {
+						status, _ := machineStatuses.Find(func(status *omnires.MachineStatus) bool {
+							return status.Metadata().ID() == id
+						})
+
+						if status != nil {
+							meta := status.TypedSpec().Value.PlatformMetadata
+							if meta != nil {
+								machineLog.Info("omni machine platform metadata",
+									zap.String("platform", meta.Platform),
+									zap.String("region", meta.Region),
+									zap.String("zone", meta.Zone),
+									zap.String("instance_id", meta.InstanceId),
+									zap.String("instance_type", meta.InstanceType),
+								)
+								if serverIDStr == meta.InstanceId {
+									machineLog.Info("found matching server ID in machine metadata")
+									pctx.SetMachineUUID(id)
+									pctx.SetMachineInfraID(providermeta.ProviderID)
+								}
+							}
+						}
+					}
+
+					machineLog.Info("omni machine")
+				})
 
 				return nil
 			},

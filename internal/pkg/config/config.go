@@ -9,7 +9,9 @@ import "fmt"
 
 // Config describes the Hetzner infra provider configuration.
 type Config struct {
-	Projects []ProjectConfig `yaml:"projects"`
+	Projects                     []ProjectConfig `yaml:"projects"`
+	OmniServiceAccountKey        string          `yaml:"omni_service_account_key"`
+	OmniMachineServiceAccountKey string          `yaml:"omni_machine_service_account_key"`
 }
 
 // ProjectConfig describes a single Hetzner Cloud project.

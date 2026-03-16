@@ -75,7 +75,43 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("invalid Hetzner configuration: %w", err)
 		}
 
-		provisioner := provider.NewProvisioner(&hetznerConfig, logger)
+		serviceAccountKey := cfg.serviceAccountKey
+		if serviceAccountKey == "" {
+			serviceAccountKey = hetznerConfig.OmniServiceAccountKey
+		}
+
+		machineServiceAccountKey := cfg.machineServiceAccountKey
+		if machineServiceAccountKey == "" {
+			machineServiceAccountKey = hetznerConfig.OmniMachineServiceAccountKey
+		}
+
+		clientOptions := []client.Option{
+			client.WithInsecureSkipTLSVerify(cfg.insecureSkipVerify),
+		}
+
+		if serviceAccountKey != "" {
+			clientOptions = append(clientOptions, client.WithServiceAccount(serviceAccountKey))
+		}
+
+		omniClient, err := client.New(cfg.omniAPIEndpoint, clientOptions...)
+		if err != nil {
+			return fmt.Errorf("failed to create Omni client: %w", err)
+		}
+
+		var omniMachineClient *client.Client
+		if machineServiceAccountKey != "" {
+			machineClientOptions := []client.Option{
+				client.WithInsecureSkipTLSVerify(cfg.insecureSkipVerify),
+				client.WithServiceAccount(machineServiceAccountKey),
+			}
+
+			omniMachineClient, err = client.New(cfg.omniAPIEndpoint, machineClientOptions...)
+			if err != nil {
+				return fmt.Errorf("failed to create Omni machine client: %w", err)
+			}
+		}
+
+		provisioner := provider.NewProvisioner(&hetznerConfig, omniClient, omniMachineClient, logger)
 
 		ip, err := infra.NewProvider(meta.ProviderID, provisioner, infra.ProviderConfig{
 			Name:        cfg.providerName,
@@ -89,14 +125,6 @@ var rootCmd = &cobra.Command{
 
 		logger.Info("starting Hetzner infra provider")
 
-		clientOptions := []client.Option{
-			client.WithInsecureSkipTLSVerify(cfg.insecureSkipVerify),
-		}
-
-		if cfg.serviceAccountKey != "" {
-			clientOptions = append(clientOptions, client.WithServiceAccount(cfg.serviceAccountKey))
-		}
-
 		return ip.Run(
 			cmd.Context(),
 			logger,
@@ -108,12 +136,13 @@ var rootCmd = &cobra.Command{
 }
 
 var cfg struct {
-	omniAPIEndpoint     string
-	serviceAccountKey   string
-	providerName        string
-	providerDescription string
-	configFile          string
-	insecureSkipVerify  bool
+	omniAPIEndpoint          string
+	serviceAccountKey        string
+	machineServiceAccountKey string
+	providerName             string
+	providerDescription      string
+	configFile               string
+	insecureSkipVerify       bool
 }
 
 func main() {
@@ -135,6 +164,8 @@ func init() {
 	rootCmd.Flags().StringVar(&meta.ProviderID, "id", meta.ProviderID, "the id of the infra provider, used to match resources with the infra provider label.")
 	rootCmd.Flags().StringVar(&cfg.serviceAccountKey, "omni-service-account-key", os.Getenv("OMNI_SERVICE_ACCOUNT_KEY"),
 		"Omni service account key, if not set, defaults to OMNI_SERVICE_ACCOUNT_KEY.")
+	rootCmd.Flags().StringVar(&cfg.machineServiceAccountKey, "omni-machine-service-account-key", os.Getenv("OMNI_MACHINE_SERVICE_ACCOUNT_KEY"),
+		"Omni machine service account key, if not set, defaults to OMNI_MACHINE_SERVICE_ACCOUNT_KEY.")
 	rootCmd.Flags().StringVar(&cfg.providerName, "provider-name", "hetzner", "provider name as it appears in Omni")
 	rootCmd.Flags().StringVar(&cfg.providerDescription, "provider-description", "Hetzner Cloud infrastructure provider", "Provider description as it appears in Omni")
 	rootCmd.Flags().BoolVar(&cfg.insecureSkipVerify, "insecure-skip-verify", false, "ignores untrusted certs on Omni side")
